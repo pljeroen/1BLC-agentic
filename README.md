@@ -1,4 +1,7 @@
 # 1BRC Challenge Entry (Java)
+[![Java 21](https://img.shields.io/badge/Java-21-orange)](https://openjdk.org/projects/jdk/21/)
+[![Build](https://img.shields.io/badge/build-maven-blue)](https://maven.apache.org/)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
 
 This repository is a clean, standalone Java project for building a 1BRC entry from scratch.
 
@@ -35,4 +38,10 @@ java -cp target/challenge-entry-0.1.0-SNAPSHOT.jar dev.morling.onebrc.CalculateA
 
 This emits:
 - `proofs/run-output-<timestamp>.txt`
-- `proofs/run-proof-<timestamp>.json`
+- `proofs/run-manifest-<timestamp>.json`
+- `proofs/run-stdout-<timestamp>.log`
+- `proofs/run-stderr-<timestamp>.log`
+
+## License
+
+Apache-2.0 (`LICENSE`).
