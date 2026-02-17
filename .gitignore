@@ -5,6 +5,3 @@ measurements.txt
 .tddv6/
 proofs/*
 !proofs/.gitkeep
-*METHOD*.md
-*PROOF*.md
-*proof*.md
