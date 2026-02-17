@@ -1,0 +1,6 @@
+/target/
+/.idea/
+*.iml
+measurements.txt
+proofs/*.json
+!proofs/.gitkeep
