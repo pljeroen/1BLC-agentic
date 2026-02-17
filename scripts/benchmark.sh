@@ -6,22 +6,33 @@ RUNS="${RUNS:-10}"
 WARMUPS="${WARMUPS:-2}"
 WORKERS="${WORKERS:-$(nproc)}"
 TIME_TO_BEAT_MS="${TIME_TO_BEAT_MS:-1535}"
-MAIN_CLASS="dev.morling.onebrc.CalculateAverage_jeroen"
-JAR="target/challenge-entry-0.1.0-SNAPSHOT.jar"
+MAIN_CLASS="${MAIN_CLASS:-dev.morling.onebrc.CalculateAverage_jeroen}"
+JAR="${JAR:-target/challenge-entry-0.1.0-SNAPSHOT.jar}"
+CLASS_PATH="${CLASS_PATH:-$JAR}"
+PASS_INPUT_ARG="${PASS_INPUT_ARG:-1}"
+PASS_WORKERS_ARG="${PASS_WORKERS_ARG:-1}"
 
 if [[ ! -f "$INPUT_FILE" ]]; then
   echo "Input file not found: $INPUT_FILE" >&2
   exit 1
 fi
 
-./mvnw -q -DskipTests package
+if [[ "$CLASS_PATH" == "$JAR" && ! -f "$JAR" ]]; then
+  ./mvnw -q -DskipTests package
+fi
 
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
 out_dir="proofs/bench-$ts"
 mkdir -p "$out_dir"
 
 read -r -a JAVA_OPTS_ARR <<< "${JAVA_OPTS:-}"
-cmd=(java "${JAVA_OPTS_ARR[@]}" -cp "$JAR" "$MAIN_CLASS" "$INPUT_FILE" "$WORKERS")
+cmd=(java "${JAVA_OPTS_ARR[@]}" -cp "$CLASS_PATH" "$MAIN_CLASS")
+if [[ "$PASS_INPUT_ARG" == "1" ]]; then
+  cmd+=("$INPUT_FILE")
+fi
+if [[ "$PASS_WORKERS_ARG" == "1" ]]; then
+  cmd+=("$WORKERS")
+fi
 
 for ((i=1; i<=WARMUPS; i++)); do
   "${cmd[@]}" > "$out_dir/warmup-$i.out"
