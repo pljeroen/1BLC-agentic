@@ -2,10 +2,21 @@
 
 This repository is a clean, standalone Java project for building a 1BRC entry from scratch.
 
+Execution contract:
+- `docs/record-attempt-contract.md` - milestones `M0..M6` with measurable gates and provenance requirements
+
 ## Layout
 
 - `src/main/java/dev/morling/onebrc/CalculateAverage_jeroen.java`: challenge entry point
-- `scripts/prove_run.sh`: generates a cryptographic run proof (SHA-256 of input/jar/output)
+- `scripts/prove_run.sh`: generates a cryptographic run proof manifest with hash chain + time-to-beat deltas
+- `scripts/verify_output.sh`: verifies output against reference implementation
+- `scripts/benchmark.sh`: repeatable benchmark runner with best/median/p90 and time-to-beat deltas
+- `scripts/benchmark_workers.sh`: adaptive worker-count sweep with median-based recommendation
+- `scripts/verify_manifest.sh`: validates manifest integrity and artifact hashes
+- `scripts/replay_manifest.sh`: reruns a manifest command and verifies replay output hash
+- `scripts/package_record_attempt.sh`: assembles benchmark + manifest into a record-attempt package
+- `scripts/run_contract_e2e.sh`: executes contract gates end-to-end and emits a final contract report
+- `docs/run-manifest.schema.json`: JSON schema for run proof manifests
 - `proofs/`: proof artifacts
 
 ## Quick start
