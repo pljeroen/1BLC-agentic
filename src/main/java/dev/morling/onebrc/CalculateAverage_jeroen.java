@@ -52,15 +52,32 @@ public final class CalculateAverage_jeroen {
 
     private static CalculationResult calculateResult(Path file, int workers)
             throws IOException, ExecutionException, InterruptedException {
+        int safeWorkers = Math.max(1, workers);
+
+        if (safeWorkers == 1) {
+            long splitStart = System.nanoTime();
+            long size = fileSize(file);
+            long splitMs = (System.nanoTime() - splitStart) / 1_000_000;
+            if (size == 0L) {
+                return new CalculationResult(Map.of(), splitMs, 0L);
+            }
+
+            long processStart = System.nanoTime();
+            StationTable table = ShardTask.processShard(file, new Shard(0L, size));
+            Map<String, Stats> merged = materializeStringMap(table);
+            long processMs = (System.nanoTime() - processStart) / 1_000_000;
+            return new CalculationResult(merged, splitMs, processMs);
+        }
+
         long splitStart = System.nanoTime();
-        List<Shard> shards = splitIntoShards(file, Math.max(1, workers));
+        List<Shard> shards = splitIntoShards(file, safeWorkers);
         long splitMs = (System.nanoTime() - splitStart) / 1_000_000;
         if (shards.isEmpty()) {
             return new CalculationResult(Map.of(), splitMs, 0L);
         }
 
         long processStart = System.nanoTime();
-        ExecutorService pool = Executors.newFixedThreadPool(Math.min(workers, shards.size()));
+        ExecutorService pool = Executors.newFixedThreadPool(Math.min(safeWorkers, shards.size()));
         try {
             List<Future<StationTable>> futures = new ArrayList<>();
             for (Shard shard : shards) {
@@ -73,18 +90,28 @@ public final class CalculateAverage_jeroen {
                 mergedBytes.mergeFrom(partial);
             }
 
-            Map<String, Stats> merged = new HashMap<>(4096);
-            mergedBytes.forEach((stationBytes, min, max, sum, count) -> {
-                String station = new String(stationBytes, StandardCharsets.UTF_8);
-                merged.put(station, Stats.fromAggregate(min, max, sum, count));
-            });
-
+            Map<String, Stats> merged = materializeStringMap(mergedBytes);
             long processMs = (System.nanoTime() - processStart) / 1_000_000;
             return new CalculationResult(merged, splitMs, processMs);
         }
         finally {
             pool.shutdown();
         }
+    }
+
+    private static long fileSize(Path file) throws IOException {
+        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
+            return channel.size();
+        }
+    }
+
+    private static Map<String, Stats> materializeStringMap(StationTable table) {
+        Map<String, Stats> merged = new HashMap<>(4096);
+        table.forEach((stationBytes, min, max, sum, count) -> {
+            String station = new String(stationBytes, StandardCharsets.UTF_8);
+            merged.put(station, Stats.fromAggregate(min, max, sum, count));
+        });
+        return merged;
     }
 
     public static String format(Map<String, Stats> statsByStation) {
@@ -120,7 +147,6 @@ public final class CalculateAverage_jeroen {
     static int parseTemperatureTenths(byte[] line, int start, int endExclusive) {
         int i = start;
         int sign = 1;
-
         if (line[i] == '-') {
             sign = -1;
             i++;
@@ -131,8 +157,7 @@ public final class CalculateAverage_jeroen {
             whole = whole * 10 + (line[i] - '0');
             i++;
         }
-
-        i++; // skip '.'
+        i++;
         int frac = i < endExclusive ? line[i] - '0' : 0;
         return sign * (whole * 10 + frac);
     }
@@ -262,6 +287,7 @@ public final class CalculateAverage_jeroen {
         private static final float LOAD_FACTOR = 0.7f;
 
         private byte[][] keys;
+        private int[] hashes;
         private int[] min;
         private int[] max;
         private long[] sum;
@@ -276,6 +302,7 @@ public final class CalculateAverage_jeroen {
                 cap <<= 1;
             }
             keys = new byte[cap][];
+            hashes = new int[cap];
             min = new int[cap];
             max = new int[cap];
             sum = new long[cap];
@@ -285,11 +312,15 @@ public final class CalculateAverage_jeroen {
         }
 
         void accumulate(byte[] line, int start, int endExclusive, int valueTenths) {
+            int hash = hashBytes(line, start, endExclusive);
+            accumulateWithHash(line, start, endExclusive, valueTenths, hash);
+        }
+
+        void accumulateWithHash(byte[] line, int start, int endExclusive, int valueTenths, int hash) {
             if (size >= threshold) {
                 rehash();
             }
 
-            int hash = hashBytes(line, start, endExclusive);
             int idx = hash & mask;
 
             while (true) {
@@ -299,6 +330,7 @@ public final class CalculateAverage_jeroen {
                     byte[] station = new byte[len];
                     System.arraycopy(line, start, station, 0, len);
                     keys[idx] = station;
+                    hashes[idx] = hash;
                     min[idx] = valueTenths;
                     max[idx] = valueTenths;
                     sum[idx] = valueTenths;
@@ -307,7 +339,7 @@ public final class CalculateAverage_jeroen {
                     return;
                 }
 
-                if (equalsBytes(key, line, start, endExclusive)) {
+                if (hashes[idx] == hash && equalsBytes(key, line, start, endExclusive)) {
                     if (valueTenths < min[idx]) {
                         min[idx] = valueTenths;
                     }
@@ -365,6 +397,7 @@ public final class CalculateAverage_jeroen {
                     byte[] station = new byte[len];
                     System.arraycopy(line, start, station, 0, len);
                     keys[idx] = station;
+                    hashes[idx] = hash;
                     min[idx] = minValueTenths;
                     max[idx] = maxValueTenths;
                     sum[idx] = sumTenthsValue;
@@ -373,7 +406,7 @@ public final class CalculateAverage_jeroen {
                     return;
                 }
 
-                if (equalsBytes(key, line, start, endExclusive)) {
+                if (hashes[idx] == hash && equalsBytes(key, line, start, endExclusive)) {
                     if (minValueTenths < min[idx]) {
                         min[idx] = minValueTenths;
                     }
@@ -391,6 +424,7 @@ public final class CalculateAverage_jeroen {
 
         private void rehash() {
             byte[][] oldKeys = keys;
+            int[] oldHashes = hashes;
             int[] oldMin = min;
             int[] oldMax = max;
             long[] oldSum = sum;
@@ -398,6 +432,7 @@ public final class CalculateAverage_jeroen {
 
             int newCap = oldKeys.length << 1;
             keys = new byte[newCap][];
+            hashes = new int[newCap];
             min = new int[newCap];
             max = new int[newCap];
             sum = new long[newCap];
@@ -409,11 +444,13 @@ public final class CalculateAverage_jeroen {
             for (int i = 0; i < oldKeys.length; i++) {
                 byte[] key = oldKeys[i];
                 if (key != null) {
-                    int idx = hashBytes(key, 0, key.length) & mask;
+                    int hash = oldHashes[i];
+                    int idx = hash & mask;
                     while (keys[idx] != null) {
                         idx = (idx + 1) & mask;
                     }
                     keys[idx] = key;
+                    hashes[idx] = hash;
                     min[idx] = oldMin[i];
                     max[idx] = oldMax[i];
                     sum[idx] = oldSum[i];
@@ -457,6 +494,14 @@ public final class CalculateAverage_jeroen {
 
         @Override
         public StationTable call() throws Exception {
+            return processShard(file, shard);
+        }
+
+        static StationTable processShard(Path file, Shard shard) throws IOException {
+            return processShardRead(file, shard);
+        }
+
+        private static StationTable processShardRead(Path file, Shard shard) throws IOException {
             StationTable table = new StationTable(1024);
             byte[] carry = new byte[256];
             int carryLen = 0;
@@ -535,11 +580,15 @@ public final class CalculateAverage_jeroen {
             }
 
             int sep = -1;
+            int hash = 0x811c9dc5;
             for (int i = start; i < endExclusive; i++) {
-                if (bytes[i] == ';') {
+                byte b = bytes[i];
+                if (b == ';') {
                     sep = i;
                     break;
                 }
+                hash ^= (b & 0xff);
+                hash *= 0x01000193;
             }
 
             if (sep <= start || sep >= endExclusive - 1) {
@@ -547,7 +596,7 @@ public final class CalculateAverage_jeroen {
             }
 
             int valueTenths = parseTemperatureTenths(bytes, sep + 1, endExclusive);
-            table.accumulate(bytes, start, sep, valueTenths);
+            table.accumulateWithHash(bytes, start, sep, valueTenths, hash);
         }
     }
 }
