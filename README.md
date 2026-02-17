@@ -39,6 +39,9 @@ This emits:
 - `proofs/run-stdout-<timestamp>.log`
 - `proofs/run-stderr-<timestamp>.log`
 
+Public sanitized proof example:
+- `docs/public-proof-run-20260217.md`
+
 ## License
 
 Apache-2.0 (`LICENSE`).
