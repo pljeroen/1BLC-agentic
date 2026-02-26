@@ -3,8 +3,7 @@
 *.iml
 measurements.txt
 .tddv6/
-proofs/*
-!proofs/.gitkeep
+proofs/
 
 
 # Personal workflow files
