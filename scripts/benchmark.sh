@@ -12,6 +12,11 @@ CLASS_PATH="${CLASS_PATH:-$JAR}"
 PASS_INPUT_ARG="${PASS_INPUT_ARG:-1}"
 PASS_WORKERS_ARG="${PASS_WORKERS_ARG:-1}"
 
+# Default JVM opts for Unsafe access + EpsilonGC
+if [[ -z "${JAVA_OPTS:-}" ]]; then
+  JAVA_OPTS="--add-opens java.base/sun.misc=ALL-UNNAMED --add-opens java.base/java.nio=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseEpsilonGC -Xms4g -Xmx4g"
+fi
+
 if [[ ! -f "$INPUT_FILE" ]]; then
   echo "Input file not found: $INPUT_FILE" >&2
   exit 1
@@ -59,7 +64,10 @@ done
 
 printf "%s\n" "${timings_ms[@]}" > "$out_dir/timings_ms.txt"
 
-python3 - <<'PY' "$out_dir/timings_ms.txt" "$RUNS" "$WARMUPS" "$WORKERS" "$INPUT_FILE" "$output_ref_sha" "$out_dir" "$TIME_TO_BEAT_MS"
+file_size_bytes="$(wc -c < "$INPUT_FILE")"
+station_count="$(grep -o '=' "$out_dir/run-1.out" | wc -l)"
+
+python3 - <<'PY' "$out_dir/timings_ms.txt" "$RUNS" "$WARMUPS" "$WORKERS" "$INPUT_FILE" "$output_ref_sha" "$out_dir" "$TIME_TO_BEAT_MS" "$file_size_bytes" "$station_count"
 import json
 import platform
 import statistics
@@ -74,6 +82,8 @@ input_file = sys.argv[5]
 output_sha = sys.argv[6]
 out_dir = Path(sys.argv[7])
 time_to_beat_ms = float(sys.argv[8])
+file_size_bytes = int(sys.argv[9])
+station_count = int(sys.argv[10])
 values = [int(x.strip()) for x in p.read_text().splitlines() if x.strip()]
 values_sorted = sorted(values)
 median = statistics.median(values)
@@ -97,6 +107,8 @@ summary = {
     "delta_best_percent": ((best - time_to_beat_ms) / time_to_beat_ms) * 100.0,
     "delta_median_percent": ((median - time_to_beat_ms) / time_to_beat_ms) * 100.0,
     "delta_p90_percent": ((p90 - time_to_beat_ms) / time_to_beat_ms) * 100.0,
+    "file_size_bytes": file_size_bytes,
+    "station_count": station_count,
     "deterministic_output_sha256": output_sha,
     "host": {
         "platform": platform.platform(),

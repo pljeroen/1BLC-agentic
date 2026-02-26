@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "runs": 10,
+  "warmups": 2,
+  "workers": 20,
+  "input_file": "measurements.txt",
+  "timings_ms": [
+    5912,
+    5272,
+    5213,
+    5295,
+    5327,
+    5385,
+    5475,
+    5426,
+    5483,
+    5529
+  ],
+  "best_ms": 5213,
+  "median_ms": 5405.5,
+  "p90_ms": 5529,
+  "time_to_beat_ms": 1535.0,
+  "delta_best_ms": 3678.0,
+  "delta_median_ms": 3870.5,
+  "delta_p90_ms": 3994.0,
+  "delta_best_percent": 239.60912052117266,
+  "delta_median_percent": 252.14983713355048,
+  "delta_p90_percent": 260.1954397394137,
+  "file_size_bytes": 17024504472,
+  "station_count": 10000,
+  "deterministic_output_sha256": "d14ee723bfdcf4a322aa5e99a1ac8f67cc07eb20b1799a24d4bdcfa499bc3569",
+  "host": {
+    "platform": "Linux-6.18.12-200.fc43.x86_64-x86_64-with-glibc2.42",
+    "processor": "",
+    "python": "3.14.2"
+  }
+}

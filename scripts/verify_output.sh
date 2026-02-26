@@ -13,10 +13,16 @@ fi
 
 ./mvnw -q -DskipTests package
 
+# Default JVM opts for Unsafe access
+if [[ -z "${JAVA_OPTS:-}" ]]; then
+  JAVA_OPTS="--add-opens java.base/sun.misc=ALL-UNNAMED --add-opens java.base/java.nio=ALL-UNNAMED"
+fi
+read -r -a JAVA_OPTS_ARR <<< "$JAVA_OPTS"
+
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
-java -cp "$JAR" "$MAIN_CLASS" "$INPUT_FILE" "$WORKERS" > "$tmp_dir/actual.txt"
+java "${JAVA_OPTS_ARR[@]}" -cp "$JAR" "$MAIN_CLASS" "$INPUT_FILE" "$WORKERS" > "$tmp_dir/actual.txt"
 ./scripts/reference_calculate.py "$INPUT_FILE" > "$tmp_dir/expected.txt"
 
 if ! diff -u "$tmp_dir/expected.txt" "$tmp_dir/actual.txt" >/dev/null; then

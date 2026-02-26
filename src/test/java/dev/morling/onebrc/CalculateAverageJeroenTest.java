@@ -56,4 +56,25 @@ class CalculateAverageJeroenTest {
 
         assertEquals(one, many);
     }
+
+    @Test
+    void branchlessParserCoversAllTemperatures() {
+        for (int tenths = -999; tenths <= 999; tenths++) {
+            String tempStr = temperatureString(tenths);
+            byte[] padded = (tempStr + "\n\0\0\0\0\0\0\0").getBytes(StandardCharsets.US_ASCII);
+
+            long word = 0;
+            for (int i = 0; i < 8; i++) {
+                word |= ((long) (padded[i] & 0xFF)) << (i * 8);
+            }
+
+            int result = CalculateAverage_jeroen.parseTemperatureBranchless(word);
+            assertEquals(tenths, result, "Failed for \"" + tempStr + "\" (tenths=" + tenths + ")");
+        }
+    }
+
+    private static String temperatureString(int tenths) {
+        int abs = Math.abs(tenths);
+        return (tenths < 0 ? "-" : "") + (abs / 10) + "." + (abs % 10);
+    }
 }

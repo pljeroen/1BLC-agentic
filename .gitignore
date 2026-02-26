@@ -5,3 +5,9 @@ measurements.txt
 .tddv6/
 proofs/*
 !proofs/.gitkeep
+
+
+# Personal workflow files
+CLAUDE.md
+SESSION_HANDOFF*.md
+.hypothesis/
