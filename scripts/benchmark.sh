@@ -14,7 +14,7 @@ PASS_WORKERS_ARG="${PASS_WORKERS_ARG:-1}"
 
 # Default JVM opts for Unsafe access + EpsilonGC
 if [[ -z "${JAVA_OPTS:-}" ]]; then
-  JAVA_OPTS="--add-opens java.base/sun.misc=ALL-UNNAMED --add-opens java.base/java.nio=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseEpsilonGC -Xms4g -Xmx4g"
+  JAVA_OPTS="--add-opens java.base/sun.misc=ALL-UNNAMED --add-opens java.base/java.nio=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseEpsilonGC -Xms4g -Xmx4g -XX:-TieredCompilation -XX:-UseCountedLoopSafepoints"
 fi
 
 if [[ ! -f "$INPUT_FILE" ]]; then

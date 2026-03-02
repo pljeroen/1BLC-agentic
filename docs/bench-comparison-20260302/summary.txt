@@ -1,0 +1,19 @@
+   best  median     p90  entry
+------- ------- -------  -----
+   1320    1399    1421  serkan_ozal
+   1322    1377    1398  jerrinot
+   1436    1540    1551  merykittyunsafe
+   1451    1504    1550  thomaswue
+   1462    1527    1586  stephenvonworley
+   1478    1536    1580  artsiomkorzun
+   1492    1557    1595  abeobk
+   1590    1701    1759  yavuztas
+   1609    1679    1688  tivrfoa
+   1662    1759    1764  yourwass
+   1663    1709    1728  gonix
+   1693    1744    1777  royvanrijn
+   1699    1780    1868  mtopolnik
+   1713    1741    1749  merykitty
+   1752    1770    1784  JamalMulla
+   1905    1953    2027  roman_r_m
+   2326    2390    2462  jeroen

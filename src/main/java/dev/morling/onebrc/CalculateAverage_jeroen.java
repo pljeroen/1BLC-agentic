@@ -1,8 +1,8 @@
 package dev.morling.onebrc;
 
 import java.io.IOException;
+import java.lang.foreign.Arena;
 import java.lang.reflect.Field;
-import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -30,11 +30,9 @@ public final class CalculateAverage_jeroen {
     }
 
     private static final int CHUNK_SIZE = 1 << 22; // 4 MB
-    private static final long SEGMENT_SIZE = 1L << 30; // 1 GB
     private static final int TABLE_SIZE = 1 << 14; // 16384
     private static final int TABLE_MASK = TABLE_SIZE - 1;
     private static final int SAFE_MARGIN = 128;
-    private static final int MAX_LINE_LEN = 256;
     private static final long SEMICOLON_PATTERN = 0x3B3B3B3B3B3B3B3BL;
 
     private CalculateAverage_jeroen() {
@@ -48,6 +46,7 @@ public final class CalculateAverage_jeroen {
                 ? Integer.parseInt(args[1])
                 : Math.max(1, Runtime.getRuntime().availableProcessors());
         System.out.println(format(calculate(Path.of(file), workers)));
+        System.out.close();
     }
 
     public static Map<String, Stats> calculate(Path file, int workers)
@@ -58,59 +57,30 @@ public final class CalculateAverage_jeroen {
                 return Map.of();
             }
 
-            int segCount = (int) ((fileSize + SEGMENT_SIZE - 1) / SEGMENT_SIZE);
-            long[] segAddr = new long[segCount];
-            long[] segLen = new long[segCount];
-            long[] segMapLen = new long[segCount];
-            MappedByteBuffer[] segBuf = new MappedByteBuffer[segCount];
+            long fileStart = channel.map(FileChannel.MapMode.READ_ONLY, 0, fileSize,
+                    Arena.global()).address();
+            long fileEnd = fileStart + fileSize;
 
-            for (int s = 0; s < segCount; s++) {
-                long off = (long) s * SEGMENT_SIZE;
-                long nominalLen = Math.min(SEGMENT_SIZE, fileSize - off);
-                long mapLen = Math.min(nominalLen + MAX_LINE_LEN, fileSize - off);
-                segBuf[s] = channel.map(FileChannel.MapMode.READ_ONLY, off, mapLen);
-                segAddr[s] = bufferAddress(segBuf[s]);
-                segLen[s] = nominalLen;
-                segMapLen[s] = mapLen;
-            }
-
-            int maxChunks = (int) (fileSize / CHUNK_SIZE) + segCount + 1;
-            int[] chunkSeg = new int[maxChunks];
+            int maxChunks = (int) (fileSize / CHUNK_SIZE) + 2;
             long[] chunkStart = new long[maxChunks];
             long[] chunkEnd = new long[maxChunks];
             int numChunks = 0;
 
-            for (int s = 0; s < segCount; s++) {
-                long base = segAddr[s];
-                long nomLen = segLen[s];
-                long mapLen = segMapLen[s];
-                long pos = 0;
-
-                if (s > 0) {
-                    while (pos < mapLen && UNSAFE.getByte(base + pos) != '\n') {
-                        pos++;
+            long pos = fileStart;
+            while (pos < fileEnd) {
+                long end = Math.min(pos + CHUNK_SIZE, fileEnd);
+                if (end < fileEnd) {
+                    while (end < fileEnd && UNSAFE.getByte(end) != '\n') {
+                        end++;
                     }
-                    if (pos < mapLen) {
-                        pos++;
+                    if (end < fileEnd) {
+                        end++;
                     }
                 }
-
-                while (pos < nomLen) {
-                    long end = Math.min(pos + CHUNK_SIZE, mapLen);
-                    if (end < mapLen) {
-                        while (end < mapLen && UNSAFE.getByte(base + end) != '\n') {
-                            end++;
-                        }
-                        if (end < mapLen) {
-                            end++;
-                        }
-                    }
-                    chunkSeg[numChunks] = s;
-                    chunkStart[numChunks] = pos;
-                    chunkEnd[numChunks] = end;
-                    numChunks++;
-                    pos = end;
-                }
+                chunkStart[numChunks] = pos;
+                chunkEnd[numChunks] = end;
+                numChunks++;
+                pos = end;
             }
 
             int safeWorkers = Math.max(1, Math.min(workers, numChunks));
@@ -126,8 +96,7 @@ public final class CalculateAverage_jeroen {
                     tables[ti] = table;
                     int ci;
                     while ((ci = counter.getAndIncrement()) < finalNumChunks) {
-                        long base = segAddr[chunkSeg[ci]];
-                        processChunk(base + chunkStart[ci], base + chunkEnd[ci], table);
+                        processChunk(chunkStart[ci], chunkEnd[ci], table);
                     }
                 });
                 threads[t].start();
@@ -149,12 +118,6 @@ public final class CalculateAverage_jeroen {
                 result.put(new String(name, 0, nameLen, StandardCharsets.UTF_8),
                         Stats.fromAggregate(minVal, maxVal, sumVal, countVal));
             });
-
-            for (MappedByteBuffer buf : segBuf) {
-                if (buf != null) {
-                    buf.isLoaded();
-                }
-            }
 
             return result;
         }
@@ -208,7 +171,7 @@ public final class CalculateAverage_jeroen {
 
         while (addr < safeEnd) {
             long nameAddr = addr;
-            int hash = 0;
+            long hash = 0;
             long word;
             long semi;
 
@@ -223,22 +186,18 @@ public final class CalculateAverage_jeroen {
             }
 
             int semiPos = Long.numberOfTrailingZeros(semi) >>> 3;
-
-            if (semiPos > 0) {
-                long mask = (1L << (semiPos << 3)) - 1;
-                hash = mixHash(hash, word & mask);
-            }
+            hash = mixHash(hash, word & ((1L << (semiPos << 3)) - 1));
 
             long semiAddr = addr + semiPos;
             int nameLen = (int) (semiAddr - nameAddr);
+            int finalHash = finalMix(hash);
 
             long tempWord = UNSAFE.getLong(semiAddr + 1);
-            int temp = parseTemperatureBranchless(tempWord);
-
-            int dotBitPos = Long.numberOfTrailingZeros(~tempWord & 0x10101000);
+            int dotBitPos = Long.numberOfTrailingZeros(~tempWord & 0x10101000); // merykitty
+            int temp = parseTemperatureBranchless(tempWord, dotBitPos);
             addr = semiAddr + 1 + (dotBitPos >>> 3) + 3;
 
-            table.accumulate(nameAddr, nameLen, hash, temp);
+            table.accumulate(nameAddr, nameLen, finalHash, temp);
         }
 
         if (addr < endAddr) {
@@ -271,7 +230,7 @@ public final class CalculateAverage_jeroen {
         }
 
         long addr = start;
-        int hash = 0;
+        long hash = 0;
         long word = 0;
         int byteInWord = 0;
 
@@ -291,6 +250,7 @@ public final class CalculateAverage_jeroen {
         if (byteInWord > 0) {
             hash = mixHash(hash, word);
         }
+        int finalHash = finalMix(hash);
 
         int nameLen = (int) (addr - start);
 
@@ -309,30 +269,34 @@ public final class CalculateAverage_jeroen {
         int frac = (addr < end) ? (UNSAFE.getByte(addr) - '0') : 0;
         int temp = sign * (whole * 10 + frac);
 
-        table.accumulate(start, nameLen, hash, temp);
+        table.accumulate(start, nameLen, finalHash, temp);
     }
 
     // ---- SWAR helpers ----
 
+    // Alan Mycroft's hasByte trick: detects a target byte in a 64-bit word in O(1).
     private static long hasByte(long word, long pattern) {
         long xor = word ^ pattern;
         return (xor - 0x0101010101010101L) & ~xor & 0x8080808080808080L;
     }
 
-    private static int mixHash(int hash, long word) {
-        hash ^= (int) word;
-        hash *= 0x01000193;
-        hash ^= (int) (word >>> 32);
-        hash *= 0x01000193;
-        return hash;
+    private static long mixHash(long hash, long word) {
+        return hash ^ word;
     }
 
-    static int parseTemperatureBranchless(long word) {
+    private static int finalMix(long h) {
+        h *= 0x9E3779B97F4A7C15L;
+        return (int) (h >>> 17);
+    }
+
+    // Branchless temperature parser by Quan Anh Mai (merykitty).
+    // Dot-position detection, sign-extension, and 0x640a0001 magic multiply
+    // for single-instruction decimal conversion.
+    static int parseTemperatureBranchless(long word, int dotBitPos) {
         long inv = ~word;
-        int dotPos = Long.numberOfTrailingZeros(inv & 0x10101000);
         long signed = (inv << 59) >> 63;
         long designMask = ~(signed & 0xFF);
-        long digits = ((word & designMask) << (28 - dotPos)) & 0x0F000F0F00L;
+        long digits = ((word & designMask) << (28 - dotBitPos)) & 0x0F000F0F00L;
         long absValue = ((digits * 0x640a0001L) >>> 32) & 0x3FF;
         return (int) ((absValue ^ signed) - signed);
     }
@@ -342,17 +306,6 @@ public final class CalculateAverage_jeroen {
     private static String formatTenths(long tenths) {
         long abs = Math.abs(tenths);
         return (tenths < 0 ? "-" : "") + (abs / 10) + "." + (abs % 10);
-    }
-
-    private static long bufferAddress(MappedByteBuffer buf) {
-        try {
-            Field f = java.nio.Buffer.class.getDeclaredField("address");
-            f.setAccessible(true);
-            return f.getLong(buf);
-        }
-        catch (Exception e) {
-            throw new RuntimeException(e);
-        }
     }
 
     // ---- Stats ----
@@ -396,8 +349,10 @@ public final class CalculateAverage_jeroen {
         void accept(byte[] name, int nameLen, int min, int max, long sum, long count);
     }
 
+    // AoS hash table design inspired by thomaswue and gonix: one cache line per slot.
+    // Off-heap allocation with 64-byte alignment to avoid cross-cache-line splits.
     private static final class StationTable {
-        // AoS layout: 1 cache line (64 bytes) per slot.
+        // AoS layout: 1 cache line (64 bytes) per slot, off-heap, 64-byte aligned.
         // [0:8]   packed: (hash<<32)|nameLen, 0=empty
         // [8:16]  sum (long)
         // [16:24] count (long)
@@ -413,8 +368,16 @@ public final class CalculateAverage_jeroen {
         private static final int E_NAME = 32;
         private static final int INLINE_MAX = 32;
 
-        private final byte[] data = new byte[TABLE_SIZE * ENTRY_BYTES];
+        private final long dataAddr;
         private final byte[][] keys = new byte[TABLE_SIZE][];
+        private final int[] occupied = new int[1024];
+        private int occupiedCount = 0;
+
+        StationTable() {
+            long raw = UNSAFE.allocateMemory((long) TABLE_SIZE * ENTRY_BYTES + 64);
+            dataAddr = (raw + 63) & ~63L;
+            UNSAFE.setMemory(dataAddr, (long) TABLE_SIZE * ENTRY_BYTES, (byte) 0);
+        }
 
         void accumulate(long nameAddr, int nameLen, int hash, int temp) {
             long firstWord = (nameLen >= 8)
@@ -424,23 +387,23 @@ public final class CalculateAverage_jeroen {
             int idx = hash & TABLE_MASK;
 
             while (true) {
-                long base = BYTE_ARRAY_BASE + (long) idx * ENTRY_BYTES;
-                long stored = UNSAFE.getLong(data, base + E_PACKED);
+                long base = dataAddr + (long) idx * ENTRY_BYTES;
+                long stored = UNSAFE.getLong(base + E_PACKED);
 
                 if (stored == packedHashLen
-                        && UNSAFE.getLong(data, base + E_NAME) == firstWord
+                        && UNSAFE.getLong(base + E_NAME) == firstWord
                         && matchNameRest(base, nameAddr, nameLen, idx)) {
-                    UNSAFE.putLong(data, base + E_SUM,
-                            UNSAFE.getLong(data, base + E_SUM) + temp);
-                    UNSAFE.putLong(data, base + E_COUNT,
-                            UNSAFE.getLong(data, base + E_COUNT) + 1);
-                    int curMin = UNSAFE.getInt(data, base + E_MIN);
-                    int curMax = UNSAFE.getInt(data, base + E_MAX);
+                    long curSum = UNSAFE.getLong(base + E_SUM);
+                    long curCount = UNSAFE.getLong(base + E_COUNT);
+                    int curMin = UNSAFE.getInt(base + E_MIN);
+                    int curMax = UNSAFE.getInt(base + E_MAX);
+                    UNSAFE.putLong(base + E_SUM, curSum + temp);
+                    UNSAFE.putLong(base + E_COUNT, curCount + 1);
                     if (temp < curMin) {
-                        UNSAFE.putInt(data, base + E_MIN, temp);
+                        UNSAFE.putInt(base + E_MIN, temp);
                     }
                     if (temp > curMax) {
-                        UNSAFE.putInt(data, base + E_MAX, temp);
+                        UNSAFE.putInt(base + E_MAX, temp);
                     }
                     return;
                 }
@@ -449,13 +412,14 @@ public final class CalculateAverage_jeroen {
                     byte[] name = new byte[nameLen];
                     UNSAFE.copyMemory(null, nameAddr, name, BYTE_ARRAY_BASE, nameLen);
                     keys[idx] = name;
-                    UNSAFE.putLong(data, base + E_PACKED, packedHashLen);
-                    UNSAFE.putLong(data, base + E_SUM, temp);
-                    UNSAFE.putLong(data, base + E_COUNT, 1);
-                    UNSAFE.putInt(data, base + E_MIN, temp);
-                    UNSAFE.putInt(data, base + E_MAX, temp);
+                    occupied[occupiedCount++] = idx;
+                    UNSAFE.putLong(base + E_PACKED, packedHashLen);
+                    UNSAFE.putLong(base + E_SUM, temp);
+                    UNSAFE.putLong(base + E_COUNT, 1);
+                    UNSAFE.putInt(base + E_MIN, temp);
+                    UNSAFE.putInt(base + E_MAX, temp);
                     int copyLen = Math.min(nameLen, INLINE_MAX);
-                    UNSAFE.copyMemory(null, nameAddr, data, base + E_NAME, copyLen);
+                    UNSAFE.copyMemory(nameAddr, base + E_NAME, copyLen);
                     return;
                 }
 
@@ -470,13 +434,13 @@ public final class CalculateAverage_jeroen {
             int end = Math.min(nameLen, INLINE_MAX);
             int i = 8;
             for (; i + 8 <= end; i += 8) {
-                if (UNSAFE.getLong(data, base + E_NAME + i)
+                if (UNSAFE.getLong(base + E_NAME + i)
                         != UNSAFE.getLong(nameAddr + i)) {
                     return false;
                 }
             }
             for (; i < end; i++) {
-                if (UNSAFE.getByte(data, base + E_NAME + i)
+                if (UNSAFE.getByte(base + E_NAME + i)
                         != UNSAFE.getByte(nameAddr + i)) {
                     return false;
                 }
@@ -499,18 +463,17 @@ public final class CalculateAverage_jeroen {
         }
 
         void mergeFrom(StationTable other) {
-            for (int i = 0; i < TABLE_SIZE; i++) {
-                long oBase = BYTE_ARRAY_BASE + (long) i * ENTRY_BYTES;
-                long packed = UNSAFE.getLong(other.data, oBase + E_PACKED);
-                if (packed != 0) {
-                    int nameLen = (int) packed;
-                    int hash = (int) (packed >>> 32);
-                    mergeEntry(other.keys[i], nameLen, hash, packed,
-                            UNSAFE.getInt(other.data, oBase + E_MIN),
-                            UNSAFE.getInt(other.data, oBase + E_MAX),
-                            UNSAFE.getLong(other.data, oBase + E_SUM),
-                            UNSAFE.getLong(other.data, oBase + E_COUNT));
-                }
+            for (int j = 0; j < other.occupiedCount; j++) {
+                int i = other.occupied[j];
+                long oBase = other.dataAddr + (long) i * ENTRY_BYTES;
+                long packed = UNSAFE.getLong(oBase + E_PACKED);
+                int nameLen = (int) packed;
+                int hash = (int) (packed >>> 32);
+                mergeEntry(other.keys[i], nameLen, hash, packed,
+                        UNSAFE.getInt(oBase + E_MIN),
+                        UNSAFE.getInt(oBase + E_MAX),
+                        UNSAFE.getLong(oBase + E_SUM),
+                        UNSAFE.getLong(oBase + E_COUNT));
             }
         }
 
@@ -521,34 +484,34 @@ public final class CalculateAverage_jeroen {
                     : readPartialWordArr(name, nameLen);
             int idx = hash & TABLE_MASK;
             while (true) {
-                long base = BYTE_ARRAY_BASE + (long) idx * ENTRY_BYTES;
-                long stored = UNSAFE.getLong(data, base + E_PACKED);
+                long base = dataAddr + (long) idx * ENTRY_BYTES;
+                long stored = UNSAFE.getLong(base + E_PACKED);
 
                 if (stored == 0) {
                     byte[] copy = new byte[nameLen];
                     System.arraycopy(name, 0, copy, 0, nameLen);
                     keys[idx] = copy;
-                    UNSAFE.putLong(data, base + E_PACKED, packedHashLen);
-                    UNSAFE.putLong(data, base + E_SUM, sumVal);
-                    UNSAFE.putLong(data, base + E_COUNT, countVal);
-                    UNSAFE.putInt(data, base + E_MIN, minVal);
-                    UNSAFE.putInt(data, base + E_MAX, maxVal);
+                    UNSAFE.putLong(base + E_PACKED, packedHashLen);
+                    UNSAFE.putLong(base + E_SUM, sumVal);
+                    UNSAFE.putLong(base + E_COUNT, countVal);
+                    UNSAFE.putInt(base + E_MIN, minVal);
+                    UNSAFE.putInt(base + E_MAX, maxVal);
                     int copyLen = Math.min(nameLen, INLINE_MAX);
-                    UNSAFE.copyMemory(name, BYTE_ARRAY_BASE, data, base + E_NAME, copyLen);
+                    UNSAFE.copyMemory(name, BYTE_ARRAY_BASE, null, base + E_NAME, copyLen);
                     return;
                 }
 
                 if (stored == packedHashLen
-                        && UNSAFE.getLong(data, base + E_NAME) == firstWord
+                        && UNSAFE.getLong(base + E_NAME) == firstWord
                         && equalsNameBytes(keys[idx], name, nameLen)) {
-                    UNSAFE.putInt(data, base + E_MIN,
-                            Math.min(UNSAFE.getInt(data, base + E_MIN), minVal));
-                    UNSAFE.putInt(data, base + E_MAX,
-                            Math.max(UNSAFE.getInt(data, base + E_MAX), maxVal));
-                    UNSAFE.putLong(data, base + E_SUM,
-                            UNSAFE.getLong(data, base + E_SUM) + sumVal);
-                    UNSAFE.putLong(data, base + E_COUNT,
-                            UNSAFE.getLong(data, base + E_COUNT) + countVal);
+                    UNSAFE.putInt(base + E_MIN,
+                            Math.min(UNSAFE.getInt(base + E_MIN), minVal));
+                    UNSAFE.putInt(base + E_MAX,
+                            Math.max(UNSAFE.getInt(base + E_MAX), maxVal));
+                    UNSAFE.putLong(base + E_SUM,
+                            UNSAFE.getLong(base + E_SUM) + sumVal);
+                    UNSAFE.putLong(base + E_COUNT,
+                            UNSAFE.getLong(base + E_COUNT) + countVal);
                     return;
                 }
 
@@ -557,16 +520,14 @@ public final class CalculateAverage_jeroen {
         }
 
         void forEach(EntryConsumer consumer) {
-            for (int i = 0; i < TABLE_SIZE; i++) {
-                long base = BYTE_ARRAY_BASE + (long) i * ENTRY_BYTES;
-                long packed = UNSAFE.getLong(data, base + E_PACKED);
-                if (packed != 0) {
-                    consumer.accept(keys[i], (int) packed,
-                            UNSAFE.getInt(data, base + E_MIN),
-                            UNSAFE.getInt(data, base + E_MAX),
-                            UNSAFE.getLong(data, base + E_SUM),
-                            UNSAFE.getLong(data, base + E_COUNT));
-                }
+            for (int j = 0; j < occupiedCount; j++) {
+                int i = occupied[j];
+                long base = dataAddr + (long) i * ENTRY_BYTES;
+                consumer.accept(keys[i], (int) UNSAFE.getLong(base + E_PACKED),
+                        UNSAFE.getInt(base + E_MIN),
+                        UNSAFE.getInt(base + E_MAX),
+                        UNSAFE.getLong(base + E_SUM),
+                        UNSAFE.getLong(base + E_COUNT));
             }
         }
 
@@ -580,12 +541,7 @@ public final class CalculateAverage_jeroen {
         }
 
         private static long readPartialWord(long addr, int len) {
-            long word = 0;
-            int n = Math.min(len, 8);
-            for (int i = 0; i < n; i++) {
-                word |= ((long) (UNSAFE.getByte(addr + i) & 0xFF)) << (i << 3);
-            }
-            return word;
+            return UNSAFE.getLong(addr) & ((1L << (len << 3)) - 1);
         }
 
         private static long readPartialWordArr(byte[] arr, int len) {

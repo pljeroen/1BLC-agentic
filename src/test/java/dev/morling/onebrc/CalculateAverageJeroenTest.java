@@ -58,6 +58,26 @@ class CalculateAverageJeroenTest {
     }
 
     @Test
+    void correctWithLargeChunks() throws Exception {
+        // 50K lines ensures chunks are large enough to trigger 3-way interleaving
+        Path file = Files.createTempFile("1brc-3way", ".txt");
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 50_000; i++) {
+            sb.append("City").append(i % 100).append(';')
+                    .append((i % 30) - 15).append('.').append(i % 10).append('\n');
+        }
+        Files.writeString(file, sb.toString(), StandardCharsets.UTF_8);
+
+        String single = CalculateAverage_jeroen.format(CalculateAverage_jeroen.calculate(file, 1));
+        String multi = CalculateAverage_jeroen.format(CalculateAverage_jeroen.calculate(file, 4));
+
+        assertEquals(single, multi);
+        // Spot-check a known station
+        Map<String, CalculateAverage_jeroen.Stats> stats = CalculateAverage_jeroen.calculate(file, 4);
+        assertEquals(500, stats.get("City0").count);
+    }
+
+    @Test
     void branchlessParserCoversAllTemperatures() {
         for (int tenths = -999; tenths <= 999; tenths++) {
             String tempStr = temperatureString(tenths);
@@ -68,7 +88,8 @@ class CalculateAverageJeroenTest {
                 word |= ((long) (padded[i] & 0xFF)) << (i * 8);
             }
 
-            int result = CalculateAverage_jeroen.parseTemperatureBranchless(word);
+            int dotBitPos = Long.numberOfTrailingZeros(~word & 0x10101000);
+            int result = CalculateAverage_jeroen.parseTemperatureBranchless(word, dotBitPos);
             assertEquals(tenths, result, "Failed for \"" + tempStr + "\" (tenths=" + tenths + ")");
         }
     }
