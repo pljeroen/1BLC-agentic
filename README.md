@@ -1,4 +1,4 @@
-# 1BRC Challenge Entry (Java)
+# 1BRC Unofficial Entry (Java)
 
 [![Java 25](https://img.shields.io/badge/Java-25-orange)](https://openjdk.org/projects/jdk/25/) [![Build](https://img.shields.io/badge/build-maven-blue)](https://maven.apache.org/) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE) [![Tests](https://img.shields.io/badge/tests-6_passing-green)]() [![Architecture](https://img.shields.io/badge/arch-Unsafe%2BSWAR%2Bbranchless-purple)]() [![Platform](https://img.shields.io/badge/platform-linux--x86__64-blue)]()
 
